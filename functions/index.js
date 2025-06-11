@@ -356,3 +356,18 @@ exports.cleanupOldNotifications = onSchedule("0 * * * *", async (event) => {
     console.error("Error during notification cleanup:", error);
   }
 });
+
+/**
+ * Firebase Auth Trigger: Logs when users is created
+ */
+exports.logUserCreated = beforeUserCreated((event) => {
+  const user = event.data;
+
+  console.log(
+    `New user created: ${user.uid} (${user.email}) via ${
+      user.providerData?.[0]?.providerId || "email"
+    } at ${new Date().toISOString()}`
+  );
+
+  return;
+});
