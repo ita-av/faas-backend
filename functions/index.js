@@ -1,19 +1,276 @@
 /**
- * Import function triggers from their respective submodules:
- *
- * const {onCall} = require("firebase-functions/v2/https");
- * const {onDocumentWritten} = require("firebase-functions/v2/firestore");
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
+onCall funkcije so del Firebase Cloud Functions, 
+ki omogočajo neposredno komunikacijo med odjemalsko aplikacijo in funkcijo v oblaku.
+
+onRequest funkcije so del Firebase Cloud Functions in omogočajo 
+uporabo splošnih HTTP zahtevkov za komunikacijo med odjemalcem in strežnikom.
+*/
+
+const admin = require("firebase-admin");
+const functions = require("firebase-functions");
+const { onObjectFinalized } = require("firebase-functions/v2/storage");
+
+admin.initializeApp();
+const db = admin.firestore();
+
+//functions
+exports.helloWorld = functions.https.onRequest((req, res) => {
+  res.send("Hello from Firebase Functions!");
+});
+
+/**
+ * Trigger when file is uploaded to Firebase Storage
  */
+exports.onFileUpload = onObjectFinalized(async (event) => {
+  const object = event.data;
+  const filePath = object.name;
+  const contentType = object.contentType;
+  const size = object.size;
 
-const {onRequest} = require("firebase-functions/v2/https");
-const logger = require("firebase-functions/logger");
+  console.log(`New file uploaded: ${filePath}`);
 
-// Create and deploy your first functions
-// https://firebase.google.com/docs/functions/get-started
+  // Extract user ID from path like 'uploads/user123/document.docx'
+  const match = filePath.match(/uploads\/([^/]+)\/(.+)/);
+  if (!match) {
+    console.log("File path format not recognized.");
+    return;
+  }
 
-exports.helloWorld = onRequest((request, response) => {
-  logger.info("Hello logs!", {structuredData: true});
-  response.send("Hello from Firebase!");
+  const userId = match[1];
+  const fileName = match[2];
+
+  // Get a random user as lector (excluding the uploader)
+  let lectorId = null;
+  try {
+    // Get all users from Firebase Auth
+    const listUsersResult = await admin.auth().listUsers();
+    const allUsers = listUsersResult.users;
+
+    // Filter out the current user (uploader)
+    const availableLectors = allUsers.filter((user) => user.uid !== userId);
+
+    if (availableLectors.length > 0) {
+      // Pick a random lector
+      const randomIndex = Math.floor(Math.random() * availableLectors.length);
+      lectorId = availableLectors[randomIndex].uid;
+      console.log(`Assigned lector: ${lectorId}`);
+    } else {
+      console.log("No other users available as lectors");
+    }
+  } catch (error) {
+    console.error("Error assigning lector:", error);
+  }
+
+  const docData = {
+    fileName,
+    filePath,
+    contentType,
+    size,
+    userId,
+    lectorId,
+    status: "pending",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    notes: "",
+    reviewedAt: null,
+  };
+
+  try {
+    await db.collection("submissions").add(docData);
+    console.log("Submission metadata saved to Firestore");
+  } catch (error) {
+    console.error("Error saving submission metadata:", error);
+  }
+});
+
+/**
+ *   This function runs every 24 hours and deletes submissions
+ *   that are older than 30 days AND have status "done".
+ */
+// exports.scheduledCleanup = functions.pubsub
+//   .schedule("every 24 hours")
+//   .timeZone("Europe/Ljubljana")
+//   .onRun(async (context) => {
+//     const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+//     const now = Date.now();
+//     const cutoffDate = new Date(now - THIRTY_DAYS_MS);
+
+//     try {
+//       // Get submissions that are older than 30 days AND have status "done"
+//       const oldDoneDocsSnapshot = await db
+//         .collection("submissions")
+//         .where("createdAt", "<", cutoffDate)
+//         .where("status", "==", "done")
+//         .get();
+
+//       const deletions = [];
+
+//       oldDoneDocsSnapshot.forEach((doc) => {
+//         deletions.push(doc.ref.delete());
+//       });
+
+//       await Promise.all(deletions);
+//       console.log(`Deleted ${deletions.length} old completed submissions.`);
+//     } catch (error) {
+//       console.error("Error during cleanup:", error);
+//     }
+
+//     return null;
+//   });
+
+// public
+exports.example = functions.https.onCall((req) => {
+  if (!req.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "User must be logged in."
+    );
+  }
+
+  const uid = req.auth.uid;
+  const email = req.auth.token.email;
+  // continue logic
+});
+
+/**
+ * Function to get all submissions for a specific user
+ */
+exports.getUserSubmissions = functions.https.onCall(async (req) => {
+  if (!req.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "User must be logged in."
+    );
+  }
+
+  const userId = req.auth.uid;
+
+  try {
+    const submissionsSnapshot = await db
+      .collection("submissions")
+      .where("userId", "==", userId)
+      .get();
+
+    const submissions = submissionsSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    return submissions;
+  } catch (error) {
+    console.error("Error fetching submissions:", error);
+    throw new functions.https.HttpsError(
+      "internal",
+      "Error fetching submissions"
+    );
+  }
+});
+
+/**
+ * Function to get assigned submissions for current user as lector
+ */
+exports.getLectorSubmissions = functions.https.onCall(async (req) => {
+  if (!req.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "User must be logged in."
+    );
+  }
+
+  const lectorId = req.auth.uid;
+
+  try {
+    const submissionsSnapshot = await db
+      .collection("submissions")
+      .where("lectorId", "==", lectorId)
+      .get();
+
+    const submissions = submissionsSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    return submissions;
+  } catch (error) {
+    console.error("Error fetching lector submissions:", error);
+    throw new functions.https.HttpsError(
+      "internal",
+      "Error fetching submissions"
+    );
+  }
+});
+
+/**
+ * Function to update the status of a submission
+ * This function updates the status and notes of a submission
+ *
+ * It expects data containing:
+ * - submissionId: string, the ID of the submission
+ * - status: string, the new status ("pending", "done")
+ * - notes: string, optional notes for the submission
+ */
+exports.updateSubmission = functions.https.onCall(async (req) => {
+  if (!req.auth) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "User must be logged in."
+    );
+  }
+
+  const { submissionId, status, notes } = req.data;
+  const lectorId = req.auth.uid;
+
+  if (!submissionId || !status) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Missing submissionId or status"
+    );
+  }
+
+  const validStatuses = ["pending", "done"];
+  if (!validStatuses.includes(status)) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Invalid status value"
+    );
+  }
+
+  try {
+    // Verify lector is assigned to this submission
+    const submissionDoc = await db
+      .collection("submissions")
+      .doc(submissionId)
+      .get();
+
+    if (!submissionDoc.exists) {
+      throw new functions.https.HttpsError("not-found", "Submission not found");
+    }
+
+    const submissionData = submissionDoc.data();
+    if (submissionData.lectorId !== lectorId) {
+      throw new functions.https.HttpsError(
+        "permission-denied",
+        "You can only update submissions assigned to you."
+      );
+    }
+
+    await db
+      .collection("submissions")
+      .doc(submissionId)
+      .update({
+        status,
+        notes: notes || "",
+        reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+    return { success: true };
+  } catch (error) {
+    console.error("Error updating status:", error);
+    if (error instanceof functions.https.HttpsError) {
+      throw error;
+    }
+    throw new functions.https.HttpsError(
+      "internal",
+      "Error updating submission status"
+    );
+  }
 });
