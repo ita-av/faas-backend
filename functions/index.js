@@ -200,6 +200,42 @@ exports.getLectorSubmissions = functions.https.onCall(async (req) => {
 });
 
 /**
+ * Function to create a notification for a user
+ * This function creates a notification document in the "notifications" collection
+ * It expects the following parameters:
+ * - userId: string, the ID of the user to notify
+ * - type: string, the type of notification (e.g., "submission", "review")
+ * - title: string, the title of the notification
+ * - message: string, the message content of the notification
+ * - data: object, optional additional data to include in the notification
+ * - actionUrl: string, optional URL for an action button in the notification
+ */
+exports.createNotification = async (
+  userId,
+  type,
+  title,
+  message,
+  data = {},
+  actionUrl = null
+) => {
+  try {
+    await db.collection("notifications").add({
+      userId,
+      type,
+      title,
+      message,
+      read: false,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      data,
+      actionUrl,
+    });
+    console.log(`Notification created for user ${userId}`);
+  } catch (error) {
+    console.error("Error creating notification:", error);
+  }
+};
+
+/**
  * Function to update the status of a submission
  * This function updates the status and notes of a submission
  *
@@ -261,6 +297,18 @@ exports.updateSubmission = functions.https.onCall(async (req) => {
         notes: notes || "",
         reviewedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+
+    // Create notification for the document owner
+    if (status === "done") {
+      await exports.createNotification(
+        submissionData.userId, // Notify the uploader
+        "document_reviewed",
+        "Document Review Complete",
+        `Your document "${submissionData.fileName}" has been reviewed`,
+        { submissionId, fileName: submissionData.fileName },
+        `/dashboard?view=${submissionId}`
+      );
+    }
 
     return { success: true };
   } catch (error) {
