@@ -9,6 +9,7 @@ uporabo splošnih HTTP zahtevkov za komunikacijo med odjemalcem in strežnikom.
 const admin = require("firebase-admin");
 const functions = require("firebase-functions");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -99,41 +100,6 @@ exports.onFileUpload = onObjectFinalized(async (event) => {
     console.error("Error saving submission metadata:", error);
   }
 });
-
-/**
- *   This function runs every 24 hours and deletes submissions
- *   that are older than 30 days AND have status "done".
- */
-// exports.scheduledCleanup = functions.pubsub
-//   .schedule("every 24 hours")
-//   .timeZone("Europe/Ljubljana")
-//   .onRun(async (context) => {
-//     const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-//     const now = Date.now();
-//     const cutoffDate = new Date(now - THIRTY_DAYS_MS);
-
-//     try {
-//       // Get submissions that are older than 30 days AND have status "done"
-//       const oldDoneDocsSnapshot = await db
-//         .collection("submissions")
-//         .where("createdAt", "<", cutoffDate)
-//         .where("status", "==", "done")
-//         .get();
-
-//       const deletions = [];
-
-//       oldDoneDocsSnapshot.forEach((doc) => {
-//         deletions.push(doc.ref.delete());
-//       });
-
-//       await Promise.all(deletions);
-//       console.log(`Deleted ${deletions.length} old completed submissions.`);
-//     } catch (error) {
-//       console.error("Error during cleanup:", error);
-//     }
-
-//     return null;
-//   });
 
 // public
 exports.example = functions.https.onCall((req) => {
@@ -338,5 +304,54 @@ exports.updateSubmission = functions.https.onCall(async (req) => {
       "internal",
       "Error updating submission status"
     );
+  }
+});
+
+// cronjob to clean up old notifications
+exports.cleanupOldNotifications = onSchedule("0 */6 * * *", async (event) => {
+  console.log("🧹 Starting notification cleanup job (v2)");
+
+  try {
+    // cutoff (1 hr)
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const now = Date.now();
+    const cutoffDate = new Date(now - ONE_HOUR_MS);
+
+    console.log(`Cutoff date: ${cutoffDate.toISOString()}`);
+
+    const oldReadNotificationsSnapshot = await db
+      .collection("notifications")
+      .where("read", "==", true)
+      .where("createdAt", "<", cutoffDate)
+      .get();
+
+    if (oldReadNotificationsSnapshot.empty) {
+      console.log("No old read notifications found to delete");
+      return;
+    }
+
+    // Batch delete (limit: 500)
+    const batch = db.batch();
+    let deleteCount = 0;
+
+    oldReadNotificationsSnapshot.forEach((doc) => {
+      batch.delete(doc.ref);
+      deleteCount++;
+      console.log(`Queued for deletion: ${doc.id}`);
+    });
+
+    // batch delete
+    await batch.commit();
+
+    console.log(`Successfully deleted ${deleteCount} old read notifications`);
+
+    // Log summary
+    console.log("Cleanup Summary:", {
+      deletedCount: deleteCount,
+      cutoffDate: cutoffDate.toISOString(),
+      executedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error during notification cleanup:", error);
   }
 });
