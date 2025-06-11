@@ -10,6 +10,7 @@ const admin = require("firebase-admin");
 const functions = require("firebase-functions");
 const { onObjectFinalized } = require("firebase-functions/v2/storage");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { beforeUserCreated } = require("firebase-functions/v2/identity");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -308,7 +309,7 @@ exports.updateSubmission = functions.https.onCall(async (req) => {
 });
 
 // cronjob to clean up old notifications
-exports.cleanupOldNotifications = onSchedule("0 */6 * * *", async (event) => {
+exports.cleanupOldNotifications = onSchedule("0 * * * *", async (event) => {
   console.log("🧹 Starting notification cleanup job (v2)");
 
   try {
