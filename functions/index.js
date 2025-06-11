@@ -75,8 +75,26 @@ exports.onFileUpload = onObjectFinalized(async (event) => {
   };
 
   try {
-    await db.collection("submissions").add(docData);
+    const docRef = await db.collection("submissions").add(docData);
     console.log("Submission metadata saved to Firestore");
+
+    // Create notification for assigned lector that a new document is assigned
+    if (lectorId) {
+      await exports.createNotification(
+        lectorId,
+        "document_assigned",
+        "New Document Assignment",
+        `You have been assigned to review "${fileName}"`,
+        {
+          submissionId: docRef.id,
+          fileName,
+          userId,
+        },
+        `/review?id=${docRef.id}`
+      );
+
+      console.log(`Created assignment notification for lector ${lectorId}`);
+    }
   } catch (error) {
     console.error("Error saving submission metadata:", error);
   }
@@ -221,7 +239,7 @@ exports.createNotification = async (
   try {
     await db.collection("notifications").add({
       userId,
-      type,
+      type, // e.g., "document_reviewed", "document_assigned"
       title,
       message,
       read: false,
@@ -306,7 +324,7 @@ exports.updateSubmission = functions.https.onCall(async (req) => {
         "Document Review Complete",
         `Your document "${submissionData.fileName}" has been reviewed`,
         { submissionId, fileName: submissionData.fileName },
-        `/dashboard?view=${submissionId}`
+        `/review?id=${submissionId}`
       );
     }
 
